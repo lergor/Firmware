@@ -36,7 +36,6 @@
  */
 
 #include "ManualSmoothingZ.hpp"
-#include "uORB/topics/parameter_update.h"
 #include <mathlib/mathlib.h>
 #include <float.h>
 
@@ -146,7 +145,12 @@ void
 ManualSmoothingZ::velocitySlewRate(float &vel_sp, const float dt)
 {
 	// limit vertical acceleration
-	float acc = (vel_sp - _vel_sp_prev) / dt;
+	float acc = 0.f;
+
+	if (dt > FLT_EPSILON) {
+		acc = (vel_sp - _vel_sp_prev) / dt;
+	}
+
 	float max_acc = (acc < 0.0f) ? -_acc_state_dependent : _acc_state_dependent;
 
 	if (fabsf(acc) > fabsf(max_acc)) {

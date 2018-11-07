@@ -1,7 +1,10 @@
 
 px4_nuttx_configure(HWCLASS m4 CONFIG nsh ROMFS y ROMFSROOT px4fmu_common)
 
-set(config_uavcan_num_ifaces 1)
+# user-configurable UART ports
+set(board_serial_ports
+	TEL2:/dev/ttyS1
+	URT6:/dev/ttyS2)
 
 set(config_module_list
 	#
@@ -20,6 +23,7 @@ set(config_module_list
 	drivers/gps
 	drivers/px4flow
 	drivers/px4fmu
+	drivers/rc_input
 	drivers/rgbled
 	drivers/stm32
 	drivers/stm32/adc
@@ -85,13 +89,13 @@ set(config_module_list
 	#
 	# Vehicle Control
 	#
-	modules/fw_att_control
-	modules/fw_pos_control_l1
+	#modules/fw_att_control
+	#modules/fw_pos_control_l1
 	#modules/gnd_att_control
 	#modules/gnd_pos_control
 	modules/mc_att_control
 	modules/mc_pos_control
-	modules/vtol_att_control
+	#modules/vtol_att_control
 
 	#
 	# Logging

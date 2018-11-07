@@ -79,11 +79,57 @@
 #include <perf/perf_counter.h>
 #include <systemlib/err.h>
 
-#include <systemlib/hardfault_log.h>
-
 #include <parameters/param.h>
+#include <px4_i2c.h>
 
 #include "up_internal.h"
+
+static int configure_switch(void);
+
+/************************************************************************************
+ * Name: board_rc_input
+ *
+ * Description:
+ *   All boards my optionally provide this API to invert the Serial RC input.
+ *   This is needed on SoCs that support the notion RXINV or TXINV as apposed to
+ *   and external XOR controlled by a GPIO
+ *
+ ************************************************************************************/
+
+__EXPORT void board_rc_input(bool invert_on, uint32_t uxart_base)
+{
+
+	irqstate_t irqstate = px4_enter_critical_section();
+
+	uint32_t cr1 =	getreg32(STM32_USART_CR1_OFFSET + uxart_base);
+	uint32_t cr2 =	getreg32(STM32_USART_CR2_OFFSET + uxart_base);
+	uint32_t regval = cr1;
+
+	/* {R|T}XINV bit fields can only be written when the USART is disabled (UE=0). */
+
+	regval &= ~USART_CR1_UE;
+
+	putreg32(regval, STM32_USART_CR1_OFFSET + uxart_base);
+
+	if (invert_on) {
+#if defined(BOARD_HAS_RX_TX_SWAP) &&	RC_SERIAL_PORT_IS_SWAPED == 1
+
+		/* This is only ever turned on */
+
+		cr2 |= (USART_CR2_RXINV | USART_CR2_TXINV | USART_CR2_SWAP);
+#else
+		cr2 |= (USART_CR2_RXINV | USART_CR2_TXINV);
+#endif
+
+	} else {
+		cr2 &= ~(USART_CR2_RXINV | USART_CR2_TXINV);
+	}
+
+	putreg32(cr2, STM32_USART_CR2_OFFSET + uxart_base);
+	putreg32(cr1, STM32_USART_CR1_OFFSET + uxart_base);
+
+	leave_critical_section(irqstate);
+}
 
 /************************************************************************************
  * Name: board_on_reset
@@ -199,137 +245,7 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 		       (hrt_callout)stm32_serial_dma_poll,
 		       NULL);
 
-#if defined(CONFIG_STM32F7_BBSRAM)
-
-	/* NB. the use of the console requires the hrt running
-	 * to poll the DMA
-	 */
-
-	/* Using Battery Backed Up SRAM */
-
-	int filesizes[CONFIG_STM32F7_BBSRAM_FILES + 1] = BSRAM_FILE_SIZES;
-
-	stm32_bbsraminitialize(BBSRAM_PATH, filesizes);
-
-#if defined(CONFIG_STM32F7_SAVE_CRASHDUMP)
-
-	/* Panic Logging in Battery Backed Up Files */
-
-	/*
-	 * In an ideal world, if a fault happens in flight the
-	 * system save it to BBSRAM will then reboot. Upon
-	 * rebooting, the system will log the fault to disk, recover
-	 * the flight state and continue to fly.  But if there is
-	 * a fault on the bench or in the air that prohibit the recovery
-	 * or committing the log to disk, the things are too broken to
-	 * fly. So the question is:
-	 *
-	 * Did we have a hard fault and not make it far enough
-	 * through the boot sequence to commit the fault data to
-	 * the SD card?
-	 */
-
-	/* Do we have an uncommitted hard fault in BBSRAM?
-	 *  - this will be reset after a successful commit to SD
-	 */
-	int hadCrash = hardfault_check_status("boot");
-
-	if (hadCrash == OK) {
-
-		PX4_ERR("[boot] There is a hard fault logged. Hold down the SPACE BAR," \
-			" while booting to halt the system!\n");
-
-		/* Yes. So add one to the boot count - this will be reset after a successful
-		 * commit to SD
-		 */
-
-		int reboots = hardfault_increment_reboot("boot", false);
-
-		/* Also end the misery for a user that holds for a key down on the console */
-
-		int bytesWaiting;
-		ioctl(fileno(stdin), FIONREAD, (unsigned long)((uintptr_t) &bytesWaiting));
-
-		if (reboots > 2 || bytesWaiting != 0) {
-
-			/* Since we can not commit the fault dump to disk. Display it
-			 * to the console.
-			 */
-
-			hardfault_write("boot", fileno(stdout), HARDFAULT_DISPLAY_FORMAT, false);
-
-			PX4_ERR("[boot] There were %d reboots with Hard fault that were not committed to disk - System halted %s\n",
-				reboots,
-				(bytesWaiting == 0 ? "" : " Due to Key Press\n"));
-
-
-			/* For those of you with a debugger set a break point on up_assert and
-			 * then set dbgContinue = 1 and go.
-			 */
-
-			/* Clear any key press that got us here */
-
-			static volatile bool dbgContinue = false;
-			int c = '>';
-
-			while (!dbgContinue) {
-
-				switch (c) {
-
-				case EOF:
-
-
-				case '\n':
-				case '\r':
-				case ' ':
-					continue;
-
-				default:
-
-					putchar(c);
-					putchar('\n');
-
-					switch (c) {
-
-					case 'D':
-					case 'd':
-						hardfault_write("boot", fileno(stdout), HARDFAULT_DISPLAY_FORMAT, false);
-						break;
-
-					case 'C':
-					case 'c':
-						hardfault_rearm("boot");
-						hardfault_increment_reboot("boot", true);
-						break;
-
-					case 'B':
-					case 'b':
-						dbgContinue = true;
-						break;
-
-					default:
-						break;
-					} // Inner Switch
-
-					PX4_ERR("\nEnter B - Continue booting\n" \
-						"Enter C - Clear the fault log\n" \
-						"Enter D - Dump fault log\n\n?>");
-					fflush(stdout);
-
-					if (!dbgContinue) {
-						c = getchar();
-					}
-
-					break;
-
-				} // outer switch
-			} // for
-
-		} // inner if
-	} // outer if
-
-#endif // CONFIG_STM32F7_SAVE_CRASHDUMP
-#endif // CONFIG_STM32F7_BBSRAM
+	(void) board_hardfault_init(2, true);
 
 
 #ifdef CONFIG_SPI
@@ -347,18 +263,68 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 	ret = stm32_sdio_initialize();
 
 	if (ret != OK) {
-		board_autoled_on(LED_RED);
 		PX4_ERR("SDIO init failed");
 		return ret;
 	}
 
 #endif
 
-	//board_spi_reset(10);
-
-	// ethernet switch
-	//uint8_t txdata[] = {0x51, 0x00, 0x21, 0x00}; //0x5100, 0x2100 MSB to LSB here.
-	//HAL_I2C_Master_Transmit(&hi2c3, (uint16_t)(0x5F<<1), txdata, 4, 0xFFFF);
+	configure_switch();
 
 	return OK;
+}
+
+/************************************************************************************
+ * Name: configure_switch
+ *
+ * Description:
+ * Configure KSZ9897R ethernet switch on i2c
+ *
+ ************************************************************************************/
+static int configure_switch(void)
+{
+	int ret = PX4_ERROR;
+
+	// attach to the i2c bus
+	struct i2c_master_s *i2c = px4_i2cbus_initialize(PX4_I2C_BUS_ONBOARD);
+
+	if (i2c == NULL) {
+		PX4_ERR("I2C device not opened");
+	}
+
+	// ethernet switch enable
+	uint8_t txdata[] = {0x51, 0x00, 0x21, 0x00}; //0x5100, 0x2100 MSB to LSB here.
+
+	struct px4_i2c_msg_t msgv;
+
+	msgv.frequency = 100000;
+	msgv.addr = 0x5F;
+	msgv.flags = 0;
+	msgv.buffer = &txdata[0];
+	msgv.length = sizeof(txdata);
+
+	unsigned retry_count = 0;
+	const unsigned retries = 5;
+
+	do {
+		ret = I2C_TRANSFER(i2c, &msgv, 1);
+
+		/* success */
+		if (ret == PX4_OK) {
+			break;
+
+		} else {
+			PX4_ERR("ETH switch I2C fail: %d, retrying", ret);
+		}
+
+		/* if we have already retried once, or we are going to give up, then reset the bus */
+		if ((retry_count >= 1) || (retry_count >= retries)) {
+			I2C_RESET(i2c);
+		}
+
+	} while (retry_count++ < retries);
+
+	px4_i2cbus_uninitialize(i2c);
+
+	return ret;
 }

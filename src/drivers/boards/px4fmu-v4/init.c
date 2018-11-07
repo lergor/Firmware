@@ -77,8 +77,6 @@
 #include <perf/perf_counter.h>
 #include <systemlib/err.h>
 
-#include <systemlib/hardfault_log.h>
-
 #include <parameters/param.h>
 
 /****************************************************************************
@@ -195,7 +193,6 @@ __EXPORT void
 stm32_boardinitialize(void)
 {
 	// Reset all PWM to Low outputs.
-
 	board_on_reset(-1);
 
 	// Configure LEDs.
@@ -207,6 +204,10 @@ stm32_boardinitialize(void)
 	stm32_configgpio(GPIO_ADC1_IN3);	/* BATT_CURRENT_SENS */
 	stm32_configgpio(GPIO_ADC1_IN4);	/* VDD_5V_SENS */
 	stm32_configgpio(GPIO_ADC1_IN11);	/* RSSI analog in */
+
+	// Configure CAN interface
+	stm32_configgpio(GPIO_CAN1_RX);
+	stm32_configgpio(GPIO_CAN1_TX);
 
 	// Configure power supply control/sense pins.
 	stm32_configgpio(GPIO_PERIPH_3V3_EN);
@@ -227,15 +228,16 @@ stm32_boardinitialize(void)
 	stm32_configgpio(GPIO_8266_RST);
 
 	// Safety - led on in led driver.
-
 	stm32_configgpio(GPIO_BTN_SAFETY);
 	stm32_configgpio(GPIO_RSSI_IN);
 	stm32_configgpio(GPIO_PPM_IN);
 
 	// Configure SPI all interfaces GPIO.
-
 	stm32_spiinitialize(PX4_SPI_BUS_RAMTRON | PX4_SPI_BUS_SENSORS);
 
+	// Configure heater GPIO.
+	stm32_configgpio(GPIO_HEATER_INPUT);
+	stm32_configgpio(GPIO_HEATER_OUTPUT);
 }
 
 /****************************************************************************
@@ -273,7 +275,6 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 #if defined(CONFIG_HAVE_CXX) && defined(CONFIG_HAVE_CXXINITIALIZE)
 
 	// Run C++ ctors before we go any further.
-
 	up_cxxinitialize();
 
 #	if defined(CONFIG_EXAMPLES_NSH_CXXINITIALIZE)
@@ -290,7 +291,6 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 	param_init();
 
 	// Configure the DMA allocator.
-
 	if (board_dma_alloc_init() < 0) {
 		message("DMA alloc FAILED");
 	}
@@ -317,160 +317,28 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 		       (hrt_callout)stm32_serial_dma_poll,
 		       NULL);
 
-#if defined(CONFIG_STM32_BBSRAM)
-
-	/**
-	 * NB. the use of the console requires the hrt running
-	 * to poll the DMA.
-	 */
-
-	// Using Battery Backed Up SRAM.
-
-	int filesizes[CONFIG_STM32_BBSRAM_FILES + 1] = BSRAM_FILE_SIZES;
-
-	stm32_bbsraminitialize(BBSRAM_PATH, filesizes);
-
-#if defined(CONFIG_STM32_SAVE_CRASHDUMP)
-
-	/* Panic Logging in Battery Backed Up Files */
-
-	/**
-	 * In an ideal world, if a fault happens in flight the
-	 * system save it to BBSRAM will then reboot. Upon
-	 * rebooting, the system will log the fault to disk, recover
-	 * the flight state and continue to fly.  But if there is
-	 * a fault on the bench or in the air that prohibit the recovery
-	 * or committing the log to disk, the things are too broken to
-	 * fly. So the question is:
-	 *
-	 * Did we have a hard fault and not make it far enough
-	 * through the boot sequence to commit the fault data to
-	 * the SD card?
-	 */
-
-	/**
-	 * Do we have an uncommitted hard fault in BBSRAM?
-	 *  - this will be reset after a successful commit to SD.
-	 */
-	int hadCrash = hardfault_check_status("boot");
-
-	if (hadCrash == OK) {
-
-		message("[boot] There is a hard fault logged. Hold down the SPACE BAR," \
-			" while booting to halt the system!\n");
-
-		/**
-		 * Yes. So add one to the boot count - this will be reset after a successful
-		 * commit to SD.
-		 */
-
-		int reboots = hardfault_increment_reboot("boot", false);
-
-		/* Also end the misery for a user that holds for a key down on the console. */
-
-		int bytesWaiting;
-		ioctl(fileno(stdin), FIONREAD, (unsigned long)((uintptr_t) &bytesWaiting));
-
-		if (reboots > 2 || bytesWaiting != 0) {
-
-			/**
-			 * Since we can not commit the fault dump to disk. Display it
-			 * to the console.
-			 */
-
-			hardfault_write("boot", fileno(stdout), HARDFAULT_DISPLAY_FORMAT, false);
-
-			message("[boot] There were %d reboots with Hard fault that were not committed to disk - System halted %s\n",
-				reboots,
-				(bytesWaiting == 0 ? "" : " Due to Key Press\n"));
-
-
-			/**
-			 * For those of you with a debugger set a break point on up_assert and
-			 * then set dbgContinue = 1 and go.
-			 */
-
-			// Clear any key press that got us here.
-
-			static volatile bool dbgContinue = false;
-			int c = '>';
-
-			while (!dbgContinue) {
-
-				switch (c) {
-
-				case EOF:
-
-
-				case '\n':
-				case '\r':
-				case ' ':
-					continue;
-
-				default:
-
-					putchar(c);
-					putchar('\n');
-
-					switch (c) {
-
-					case 'D':
-					case 'd':
-						hardfault_write("boot", fileno(stdout), HARDFAULT_DISPLAY_FORMAT, false);
-						break;
-
-					case 'C':
-					case 'c':
-						hardfault_rearm("boot");
-						hardfault_increment_reboot("boot", true);
-						break;
-
-					case 'B':
-					case 'b':
-						dbgContinue = true;
-						break;
-
-					default:
-						break;
-					} // Inner Switch
-
-					message("\nEnter B - Continue booting\n" \
-						"Enter C - Clear the fault log\n" \
-						"Enter D - Dump fault log\n\n?>");
-					fflush(stdout);
-
-					if (!dbgContinue) {
-						c = getchar();
-					}
-
-					break;
-
-				} // outer switch
-			} // for
-
-		} // inner if
-	} // outer if
-
-#endif // CONFIG_STM32_SAVE_CRASHDUMP
-#endif // CONFIG_STM32_BBSRAM
-
 	// Initial LED state.
 	drv_led_start();
 	led_off(LED_RED);
 	led_off(LED_GREEN);
 	led_off(LED_BLUE);
 
-	// Power up the sensors.
+	if (board_hardfault_init(2, true) != 0) {
+		led_on(LED_RED);
+	}
 
+	// Power up the sensors.
 	stm32_gpiowrite(GPIO_VDD_3V3_SENSORS_EN, 1);
 
-	// Configure SPI-based devices.
+	// Power down the heater.
+	stm32_gpiowrite(GPIO_HEATER_OUTPUT, 0);
 
+	// Configure SPI-based devices.
 	spi1 = stm32_spibus_initialize(1);
 
 	if (!spi1) {
 		message("[boot] FAILED to initialize SPI port 1\n");
-		board_autoled_on(LED_RED);
+		led_on(LED_RED);
 		return -ENODEV;
 	}
 
@@ -485,12 +353,11 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 	up_udelay(20);
 
 	// Get the SPI port for the FRAM.
-
 	spi2 = stm32_spibus_initialize(2);
 
 	if (!spi2) {
 		message("[boot] FAILED to initialize SPI port 2\n");
-		board_autoled_on(LED_RED);
+		led_on(LED_RED);
 		return -ENODEV;
 	}
 
@@ -507,11 +374,12 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 	SPI_SELECT(spi2, PX4_SPIDEV_BARO, false);
 
 #ifdef CONFIG_MMCSD
-	// First, get an instance of the SDIO interface.
 
+	// First, get an instance of the SDIO interface.
 	sdio = sdio_initialize(CONFIG_NSH_MMCSDSLOTNO);
 
 	if (!sdio) {
+		led_on(LED_RED);
 		message("[boot] Failed to initialize SDIO slot %d\n",
 			CONFIG_NSH_MMCSDSLOTNO);
 		return -ENODEV;
@@ -521,6 +389,7 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 	int ret = mmcsd_slotinitialize(CONFIG_NSH_MMCSDMINOR, sdio);
 
 	if (ret != OK) {
+		led_on(LED_RED);
 		message("[boot] Failed to bind SDIO to the MMC/SD driver: %d\n", ret);
 		return ret;
 	}

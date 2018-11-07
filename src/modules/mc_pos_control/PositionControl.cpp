@@ -54,26 +54,25 @@ void PositionControl::updateState(const PositionControlStates &states)
 	_vel_dot = states.acceleration;
 }
 
-void PositionControl::updateSetpoint(const vehicle_local_position_setpoint_s &setpoint)
+bool PositionControl::updateSetpoint(const vehicle_local_position_setpoint_s &setpoint)
 {
-	// If full manual is required (thrust already generated), don't run position/velocity
-	// controller and just return thrust.
-	_skip_controller = false;
-
-	_pos_sp = Vector3f(&setpoint.x);
-	_vel_sp = Vector3f(&setpoint.vx);
-	_acc_sp = Vector3f(&setpoint.acc_x);
+	_pos_sp = Vector3f(setpoint.x, setpoint.y, setpoint.z);
+	_vel_sp = Vector3f(setpoint.vx, setpoint.vy, setpoint.vz);
+	_acc_sp = Vector3f(setpoint.acc_x, setpoint.acc_y, setpoint.acc_z);
 	_thr_sp = Vector3f(setpoint.thrust);
 	_yaw_sp = setpoint.yaw;
 	_yawspeed_sp = setpoint.yawspeed;
-	_interfaceMapping();
+	bool mapping_succeeded = _interfaceMapping();
 
-	if (PX4_ISFINITE(setpoint.thrust[0]) && PX4_ISFINITE(setpoint.thrust[1]) && PX4_ISFINITE(setpoint.thrust[2])) {
-		_skip_controller = true;
-	}
+	// If full manual is required (thrust already generated), don't run position/velocity
+	// controller and just return thrust.
+	_skip_controller = PX4_ISFINITE(setpoint.thrust[0]) && PX4_ISFINITE(setpoint.thrust[1])
+			   && PX4_ISFINITE(setpoint.thrust[2]);
+
+	return mapping_succeeded;
 }
 
-void PositionControl::generateThrustYawSetpoint(const float &dt)
+void PositionControl::generateThrustYawSetpoint(const float dt)
 {
 	if (_skip_controller) {
 		// Already received a valid thrust set-point.
@@ -98,14 +97,17 @@ void PositionControl::generateThrustYawSetpoint(const float &dt)
 	}
 }
 
-void PositionControl::_interfaceMapping()
+bool PositionControl::_interfaceMapping()
 {
-	// if noting is valid, then apply failsafe landing
+	// if nothing is valid, then apply failsafe landing
 	bool failsafe = false;
 
 	// Respects FlightTask interface, where NAN-set-points are of no interest
-	// and do not require control. A valide position and velocity setpoint will
+	// and do not require control. A valid position and velocity setpoint will
 	// be mapped to a desired position setpoint with a feed-forward term.
+	// States and setpoints which are integrals of the reference setpoint are set to 0.
+	// For instance: reference is velocity-setpoint -> position and position-setpoint = 0
+	//               reference is thrust-setpoint -> position, velocity, position-/velocity-setpoint = 0
 	for (int i = 0; i <= 2; i++) {
 
 		if (PX4_ISFINITE(_pos_sp(i))) {
@@ -117,7 +119,7 @@ void PositionControl::_interfaceMapping()
 			}
 
 			// thrust setpoint is not supported in position control
-			_thr_sp(i) = 0.0f;
+			_thr_sp(i) = NAN;
 
 			// to run position control, we require valid position and velocity
 			if (!PX4_ISFINITE(_pos(i)) || !PX4_ISFINITE(_vel(i))) {
@@ -127,17 +129,11 @@ void PositionControl::_interfaceMapping()
 		} else if (PX4_ISFINITE(_vel_sp(i))) {
 
 			// Velocity controller is active without position control.
-			// Set the desired position set-point equal to current position
-			// such that error is zero.
-			if (PX4_ISFINITE(_pos(i))) {
-				_pos_sp(i) = _pos(i);
+			// Set integral states and setpoints to 0
+			_pos_sp(i) = _pos(i) = 0.0f;
 
-			} else {
-				_pos_sp(i) = _pos(i) = 0.0f;
-			}
-
-			// thrust setpoint is not supported in position control
-			_thr_sp(i) = 0.0f;
+			// thrust setpoint is not supported in velocity control
+			_thr_sp(i) = NAN;
 
 			// to run velocity control, we require valid velocity
 			if (!PX4_ISFINITE(_vel(i))) {
@@ -147,20 +143,9 @@ void PositionControl::_interfaceMapping()
 		} else if (PX4_ISFINITE(_thr_sp(i))) {
 
 			// Thrust setpoint was generated from sticks directly.
-			// Set all other set-points equal MC states.
-			if (PX4_ISFINITE(_pos(i))) {
-				_pos_sp(i) = _pos(i);
-
-			} else {
-				_pos_sp(i) = _pos(i) = 0.0f;
-			}
-
-			if (PX4_ISFINITE(_vel(i))) {
-				_vel_sp(i) = _vel(i);
-
-			} else {
-				_vel_sp(i) = _vel(i) = 0.0f;
-			}
+			// Set all integral states and setpoints to 0
+			_pos_sp(i) = _pos(i) = 0.0f;
+			_vel_sp(i) = _vel(i) = 0.0f;
 
 			// Reset the Integral term.
 			_thr_int(i) = 0.0f;
@@ -201,26 +186,26 @@ void PositionControl::_interfaceMapping()
 
 	// check failsafe
 	if (failsafe) {
-		_skip_controller = true;
-
 		// point the thrust upwards
 		_thr_sp(0) = _thr_sp(1) = 0.0f;
 		// throttle down such that vehicle goes down with
 		// 70% of throttle range between min and hover
 		_thr_sp(2) = -(MPC_THR_MIN.get() + (MPC_THR_HOVER.get() - MPC_THR_MIN.get()) * 0.7f);
 	}
+
+	return !(failsafe);
 }
 
 void PositionControl::_positionController()
 {
 	// P-position controller
-	Vector3f vel_sp_position = (_pos_sp - _pos).emult(Vector3f(MPC_XY_P.get(), MPC_XY_P.get(), MPC_Z_P.get()));
+	const Vector3f vel_sp_position = (_pos_sp - _pos).emult(Vector3f(MPC_XY_P.get(), MPC_XY_P.get(), MPC_Z_P.get()));
 	_vel_sp = vel_sp_position + _vel_sp;
 
 	// Constrain horizontal velocity by prioritizing the velocity component along the
 	// the desired position setpoint over the feed-forward term.
-	Vector2f vel_sp_xy = ControlMath::constrainXY(Vector2f(&vel_sp_position(0)),
-			     Vector2f(&(_vel_sp - vel_sp_position)(0)), _constraints.speed_xy);
+	const Vector2f vel_sp_xy = ControlMath::constrainXY(Vector2f(vel_sp_position),
+				   Vector2f(_vel_sp - vel_sp_position), _constraints.speed_xy);
 	_vel_sp(0) = vel_sp_xy(0);
 	_vel_sp(1) = vel_sp_xy(1);
 	// Constrain velocity in z-direction.
@@ -254,7 +239,7 @@ void PositionControl::_velocityController(const float &dt)
 	// 	 consideration of the desired thrust in D-direction. In addition, the thrust in
 	// 	 NE-direction is also limited by the maximum tilt.
 
-	Vector3f vel_err = _vel_sp - _vel;
+	const Vector3f vel_err = _vel_sp - _vel;
 
 	// Consider thrust in D-direction.
 	float thrust_desired_D = MPC_Z_VEL_P.get() * vel_err(2) +  MPC_Z_VEL_D.get() * _vel_dot(2) + _thr_int(
@@ -278,7 +263,7 @@ void PositionControl::_velocityController(const float &dt)
 	// Saturate thrust setpoint in D-direction.
 	_thr_sp(2) = math::constrain(thrust_desired_D, uMin, uMax);
 
-	if (fabsf(_thr_sp(0)) + fabsf(_thr_sp(1))  > FLT_EPSILON) {
+	if (PX4_ISFINITE(_thr_sp(0)) && PX4_ISFINITE(_thr_sp(1))) {
 		// Thrust set-point in NE-direction is already provided. Only
 		// scaling by the maximum tilt is required.
 		float thr_xy_max = fabsf(_thr_sp(2)) * tanf(_constraints.tilt);
@@ -307,7 +292,7 @@ void PositionControl::_velocityController(const float &dt)
 		}
 
 		// Get the direction of (r-y) in NE-direction.
-		float direction_NE = Vector2f(&vel_err(0)) * Vector2f(&_vel_sp(0));
+		float direction_NE = Vector2f(vel_err) * Vector2f(_vel_sp);
 
 		// Apply Anti-Windup in NE-direction.
 		bool stop_integral_NE = (thrust_desired_NE * thrust_desired_NE >= thrust_max_NE * thrust_max_NE &&
@@ -318,7 +303,7 @@ void PositionControl::_velocityController(const float &dt)
 			_thr_int(1) += vel_err(1) * MPC_XY_VEL_I.get() * dt;
 
 			// magnitude of thrust integral can never exceed maximum throttle in NE
-			float integral_mag_NE = Vector2f(&_thr_int(0)).length();
+			float integral_mag_NE = Vector2f(_thr_int).length();
 
 			if (integral_mag_NE > 0.0f && integral_mag_NE > thrust_max_NE) {
 				_thr_int(0) = _thr_int(0) / integral_mag_NE * thrust_max_NE;

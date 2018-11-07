@@ -59,11 +59,6 @@
 #define GPIO_LED1       (GPIO_OUTPUT|GPIO_PUSHPULL|GPIO_SPEED_50MHz|GPIO_OUTPUT_CLEAR|GPIO_PORTB|GPIO_PIN5)
 #define GPIO_LED_BLUE   GPIO_LED1
 
-/* GPS
- * UART6
- */
-#define GPS_DEFAULT_UART_PORT	"/dev/ttyS2"
-
 /*
  * ADC channels
  *
@@ -172,6 +167,7 @@
 // One device per bus
 #define PX4_SPI_BUS_SENSORS         1
 #define PX4_SPIDEV_MPU              1
+#define PX4_SPIDEV_ICM_20602        1
 #define PX4_SPIDEV_BARO_BUS         3
 #define PX4_SPIDEV_BARO             1
 

@@ -314,10 +314,12 @@
 #define HRT_TIMER		     5  /* use timer5 for the HRT */
 #define HRT_TIMER_CHANNEL    1  /* use capture/compare channel 3 */
 
-//#define RC_UXART_BASE        STM32_USART6_BASE /* NOT FMUv5 test HW ONLY*/
-//#define RC_SERIAL_PORT       "/dev/ttyS4"
-
-#define GPS_DEFAULT_UART_PORT "/dev/ttyS5" /* UART1 on FMUv5 */
+#define RC_UXART_BASE                      STM32_UART5_BASE
+#define RC_SERIAL_PORT                     "/dev/ttyS4"
+#define BOARD_HAS_SINGLE_WIRE              0 /* HW is capable of Single Wire */
+#define BOARD_HAS_SINGLE_WIRE_ON_TX        0 /* HW default is wired as Single Wire On TX pin */
+#define BOARD_HAS_RX_TX_SWAP               0 /* HW Can swap TX and RX */
+#define RC_SERIAL_PORT_IS_SWAPED           0 /* Board wired with RC's TX is on cpu RX */
 
 /* Power switch controls ******************************************************/
 
@@ -397,6 +399,8 @@
 
 #define PX4_GPIO_INIT_LIST { \
 		PX4_ADC_GPIO,                     \
+		GPIO_CAN1_RX,                     \
+		GPIO_CAN1_TX,                     \
 	}
 
 __BEGIN_DECLS

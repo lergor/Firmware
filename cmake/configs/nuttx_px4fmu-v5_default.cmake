@@ -1,6 +1,13 @@
 
 px4_nuttx_configure(HWCLASS m7 CONFIG nsh ROMFS y ROMFSROOT px4fmu_common IO px4io-v2)
 
+# user-configurable UART ports
+set(board_serial_ports
+	GPS1:/dev/ttyS0
+	TEL1:/dev/ttyS1
+	TEL2:/dev/ttyS2
+	TEL4:/dev/ttyS3)
+
 set(config_uavcan_num_ifaces 2)
 
 set(config_module_list
@@ -15,24 +22,25 @@ set(config_module_list
 
 	drivers/batt_smbus
 	drivers/blinkm
+	drivers/camera_trigger
+	drivers/gps
 	drivers/imu/bma180
 	drivers/imu/bmi055
 	drivers/imu/bmi160
-	drivers/camera_trigger
-	drivers/gps
-	drivers/irlock
-	drivers/mkblctrl
 	drivers/imu/mpu6000
 	drivers/imu/mpu9250
+	drivers/irlock
+	drivers/mkblctrl
 	drivers/oreoled
+	drivers/pmw3901
 	drivers/pwm_input
 	drivers/pwm_out_sim
 	drivers/px4flow
 	drivers/px4fmu
 	drivers/px4io
+	drivers/rc_input
 	drivers/rgbled
-	# Enable the line below to put the three leds into PWM RGB mode
-	#drivers/rgbled_pwm
+	#drivers/rgbled_pwm # Enable to put the three leds into PWM RGB mode
 	drivers/stm32
 	drivers/stm32/adc
 	drivers/stm32/tone_alarm

@@ -7,7 +7,7 @@
 
 set VEHICLE_TYPE mc
 
-if [ $AUTOCNF == yes ]
+if [ $AUTOCNF = yes ]
 then
 	param set NAV_ACC_RAD 2.0
 
@@ -20,7 +20,10 @@ then
 	param set PWM_RATE 400
 fi
 
+#
 # This is the gimbal pass mixer.
+#
 set MIXER_AUX pass
-set PWM_AUX_RATE 50
+
 set PWM_AUX_OUT 1234
+set PWM_AUX_RATE 50
