@@ -41,6 +41,24 @@
 
 using namespace matrix;
 
+FlightTaskManualPosition::FlightTaskManualPosition() : _collision_prevention(this)
+{
+
+}
+
+bool FlightTaskManualPosition::initializeSubscriptions(SubscriptionArray &subscription_array)
+{
+	if (!FlightTaskManualAltitude::initializeSubscriptions(subscription_array)) {
+		return false;
+	}
+
+	if (!_collision_prevention.initializeSubscriptions(subscription_array)) {
+		return false;
+	}
+
+	return true;
+}
+
 bool FlightTaskManualPosition::updateInitialize()
 {
 	bool ret = FlightTaskManualAltitude::updateInitialize();
@@ -53,13 +71,14 @@ bool FlightTaskManualPosition::updateInitialize()
 
 bool FlightTaskManualPosition::activate()
 {
-
 	// all requirements from altitude-mode still have to hold
 	bool ret = FlightTaskManualAltitude::activate();
 
+	_constraints.tilt = math::radians(_param_mpc_tiltmax_air.get());
+
 	// set task specific constraint
-	if (_constraints.speed_xy >= MPC_VEL_MANUAL.get()) {
-		_constraints.speed_xy = MPC_VEL_MANUAL.get();
+	if (_constraints.speed_xy >= _param_mpc_vel_manual.get()) {
+		_constraints.speed_xy = _param_mpc_vel_manual.get();
 	}
 
 	_position_setpoint(0) = _position(0);
@@ -99,7 +118,7 @@ void FlightTaskManualPosition::_scaleSticks()
 		// raise the limit at a constant rate up to the user specified value
 
 		if (_velocity_scale < _constraints.speed_xy) {
-			_velocity_scale += _deltatime * MPC_ACC_HOR_ESTM.get();
+			_velocity_scale += _deltatime * _param_mpc_acc_hor_estm.get();
 
 		} else {
 			_velocity_scale = _constraints.speed_xy;
@@ -112,6 +131,12 @@ void FlightTaskManualPosition::_scaleSticks()
 
 	/* Rotate setpoint into local frame. */
 	_rotateIntoHeadingFrame(vel_sp_xy);
+
+	// collision prevention
+	if (_collision_prevention.is_active()) {
+		_collision_prevention.modifySetpoint(vel_sp_xy, _constraints.speed_xy);
+	}
+
 	_velocity_setpoint(0) = vel_sp_xy(0);
 	_velocity_setpoint(1) = vel_sp_xy(1);
 }
@@ -121,7 +146,7 @@ void FlightTaskManualPosition::_updateXYlock()
 	/* If position lock is not active, position setpoint is set to NAN.*/
 	const float vel_xy_norm = Vector2f(_velocity).length();
 	const bool apply_brake = Vector2f(_velocity_setpoint).length() < FLT_EPSILON;
-	const bool stopped = (MPC_HOLD_MAX_XY.get() < FLT_EPSILON || vel_xy_norm < MPC_HOLD_MAX_XY.get());
+	const bool stopped = (_param_mpc_hold_max_xy.get() < FLT_EPSILON || vel_xy_norm < _param_mpc_hold_max_xy.get());
 
 	if (apply_brake && stopped && !PX4_ISFINITE(_position_setpoint(0))) {
 		_position_setpoint(0) = _position(0);
@@ -146,6 +171,13 @@ void FlightTaskManualPosition::_updateXYlock()
 void FlightTaskManualPosition::_updateSetpoints()
 {
 	FlightTaskManualAltitude::_updateSetpoints(); // needed to get yaw and setpoints in z-direction
+
+	// check if an external yaw handler is active and if yes, let it update the yaw setpoints
+	if (_weathervane_yaw_handler != nullptr && _weathervane_yaw_handler->is_active()) {
+		_yaw_setpoint = NAN;
+		_yawspeed_setpoint += _weathervane_yaw_handler->get_weathervane_yawrate();
+	}
+
 	_thrust_setpoint.setAll(NAN); // don't require any thrust setpoints
 	_updateXYlock(); // check for position lock
 }

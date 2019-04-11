@@ -92,7 +92,7 @@ int Heater::controller_period(char *argv[])
 int Heater::custom_command(int argc, char *argv[])
 {
 	// Check if the driver is running.
-	if (!is_running() && !_object) {
+	if (!is_running()) {
 		PX4_INFO("not running");
 		return PX4_ERROR;
 	}
@@ -102,16 +102,6 @@ int Heater::custom_command(int argc, char *argv[])
 	// Display/Set the heater controller period value (usec).
 	if (strcmp(arg_v, "controller_period") == 0) {
 		return get_instance()->controller_period(argv);
-	}
-
-	// Display the heater on duty cycle as a percent.
-	if (strcmp(arg_v, "duty_cycle") == 0) {
-		return get_instance()->duty_cycle();
-	}
-
-	// Display/Set the heater driver feed forward value.
-	if (strcmp(arg_v, "feed_forward") == 0) {
-		return get_instance()->feed_forward(argv);
 	}
 
 	// Display/Set the heater driver integrator gain value.
@@ -134,11 +124,6 @@ int Heater::custom_command(int argc, char *argv[])
 		return get_instance()->temperature_setpoint(argv);
 	}
 
-	// Displays the IMU reported temperature.
-	if (strcmp(arg_v, "temp") == 0) {
-		return get_instance()->sensor_temperature();
-	}
-
 	get_instance()->print_usage("Unrecognized command.");
 	return PX4_OK;
 }
@@ -149,8 +134,6 @@ void Heater::cycle()
 		exit_and_cleanup();
 		return;
 	}
-
-	int controller_time_on_usec = 0;
 
 	if (_heater_on) {
 		// Turn the heater off.
@@ -173,23 +156,22 @@ void Heater::cycle()
 		_sensor_temperature = _sensor_accel.temperature;
 
 		// Calculate the temperature delta between the setpoint and reported temperature.
-		float temperature_delta = _p_temperature_setpoint.get() - _sensor_temperature;
+		float temperature_delta = _param_sens_imu_temp.get() - _sensor_temperature;
 
 		// Modulate the heater time on with a feedforward/PI controller.
-		_proportional_value = temperature_delta * _p_proportional_gain.get();
-		_integrator_value += temperature_delta * _p_integrator_gain.get();
+		_proportional_value = temperature_delta * _param_sens_imu_temp_p.get();
+		_integrator_value += temperature_delta * _param_sens_imu_temp_i.get();
 
 		// Constrain the integrator value to no more than 25% of the duty cycle.
 		_integrator_value = math::constrain(_integrator_value, -0.25f, 0.25f);
 
-		controller_time_on_usec = (int)((_p_feed_forward_value.get() + _proportional_value +
-						 _integrator_value) * (float)_controller_period_usec);
+		// Calculate the duty cycle. This is a value between 0 and 1.
+		float duty = _proportional_value + _integrator_value;
+
+		_controller_time_on_usec = (int)(duty * (float)_controller_period_usec);
 
 		// Constrain the heater time within the allowable duty cycle.
-		controller_time_on_usec = math::constrain(controller_time_on_usec, 0, _controller_period_usec);
-
-		// Filter the duty cycle value over a ~2 second time constant.
-		_duty_cycle = (0.05f * ((float)controller_time_on_usec / (float)_controller_period_usec)) + (0.95f * _duty_cycle);
+		_controller_time_on_usec = math::constrain(_controller_time_on_usec, 0, _controller_period_usec);
 
 		// Turn the heater on.
 		_heater_on = true;
@@ -200,11 +182,11 @@ void Heater::cycle()
 	// Schedule the next cycle.
 	if (_heater_on) {
 		work_queue(LPWORK, &_work, (worker_t)&Heater::cycle_trampoline, this,
-			   USEC2TICK(controller_time_on_usec));
+			   USEC2TICK(_controller_time_on_usec));
 
 	} else {
 		work_queue(LPWORK, &_work, (worker_t)&Heater::cycle_trampoline, this,
-			   USEC2TICK(_controller_period_usec - controller_time_on_usec));
+			   USEC2TICK(_controller_period_usec - _controller_time_on_usec));
 	}
 }
 
@@ -212,23 +194,6 @@ void Heater::cycle_trampoline(void *argv)
 {
 	Heater *obj = reinterpret_cast<Heater *>(argv);
 	obj->cycle();
-}
-
-float Heater::duty_cycle()
-{
-	PX4_INFO("Average duty cycle:  %3.1f%%", (double)(_duty_cycle * 100.f));
-	return _duty_cycle;
-}
-
-float Heater::feed_forward(char *argv[])
-{
-	if (argv[1]) {
-		_p_feed_forward_value.set(atof(argv[1]));
-
-	}
-
-	PX4_INFO("Feed forward value:  %2.5f", (double)_p_feed_forward_value.get());
-	return _p_feed_forward_value.get();
 }
 
 void Heater::initialize_topics()
@@ -249,7 +214,7 @@ void Heater::initialize_topics()
 		}
 
 		// If the correct ID is found, exit the for-loop with _sensor_accel_sub pointing to the correct instance.
-		if (_sensor_accel.device_id == (uint32_t)_p_sensor_id.get()) {
+		if (_sensor_accel.device_id == (uint32_t)_param_sens_temp_id.get()) {
 			PX4_INFO("IMU sensor identified.");
 			break;
 		}
@@ -260,7 +225,7 @@ void Heater::initialize_topics()
 	PX4_INFO("Device ID:  %d", _sensor_accel.device_id);
 
 	// Exit the driver if the sensor ID does not match the desired sensor.
-	if (_sensor_accel.device_id != (uint32_t)_p_sensor_id.get()) {
+	if (_sensor_accel.device_id != (uint32_t)_param_sens_temp_id.get()) {
 		request_stop();
 		PX4_ERR("Could not identify IMU sensor.");
 	}
@@ -275,18 +240,18 @@ void Heater::initialize_trampoline(void *argv)
 		return;
 	}
 
-	_object = heater;
+	_object.store(heater);
 	heater->start();
 }
 
 float Heater::integrator(char *argv[])
 {
 	if (argv[1]) {
-		_p_integrator_gain.set(atof(argv[1]));
+		_param_sens_imu_temp_i.set(atof(argv[1]));
 	}
 
-	PX4_INFO("Integrator gain:  %2.5f", (double)_p_integrator_gain.get());
-	return _p_integrator_gain.get();
+	PX4_INFO("Integrator gain:  %2.5f", (double)_param_sens_imu_temp_i.get());
+	return _param_sens_imu_temp_i.get();
 }
 
 int Heater::orb_update(const struct orb_metadata *meta, int handle, void *buffer)
@@ -313,7 +278,7 @@ int Heater::print_status()
 {
 	PX4_INFO("Temperature: %3.3fC - Setpoint: %3.2fC - Heater State: %s",
 		 (double)_sensor_temperature,
-		 (double)_p_temperature_setpoint.get(),
+		 (double)_param_sens_imu_temp.get(),
 		 _heater_on ? "On" : "Off");
 
 	return PX4_OK;
@@ -335,8 +300,6 @@ This task can be started at boot from the startup scripts by setting SENS_EN_THE
 
 	PRINT_MODULE_USAGE_NAME("heater", "system");
 	PRINT_MODULE_USAGE_COMMAND_DESCR("controller_period", "Reports the heater driver cycle period value, (us), and sets it if supplied an argument.");
-	PRINT_MODULE_USAGE_COMMAND_DESCR("duty_cycle", "Reports the heater duty cycle (%).");
-	PRINT_MODULE_USAGE_COMMAND_DESCR("feed_forward", "Sets the feedforward value if supplied an argument and reports the current value.");
 	PRINT_MODULE_USAGE_COMMAND_DESCR("integrator", "Sets the integrator gain value if supplied an argument and reports the current value.");
 	PRINT_MODULE_USAGE_COMMAND_DESCR("proportional", "Sets the proportional gain value if supplied an argument and reports the current value.");
 	PRINT_MODULE_USAGE_COMMAND_DESCR("sensor_id", "Reports the current IMU the heater is temperature controlling.");
@@ -353,23 +316,17 @@ This task can be started at boot from the startup scripts by setting SENS_EN_THE
 float Heater::proportional(char *argv[])
 {
 	if (argv[1]) {
-		_p_proportional_gain.set(atof(argv[1]));
+		_param_sens_imu_temp_p.set(atof(argv[1]));
 	}
 
-	PX4_INFO("Proportional gain:  %2.5f", (double)_p_proportional_gain.get());
-	return _p_proportional_gain.get();
+	PX4_INFO("Proportional gain:  %2.5f", (double)_param_sens_imu_temp_p.get());
+	return _param_sens_imu_temp_p.get();
 }
 
 uint32_t Heater::sensor_id()
 {
 	PX4_INFO("Sensor ID:  %d", _sensor_accel.device_id);
 	return _sensor_accel.device_id;
-}
-
-float Heater::sensor_temperature()
-{
-	PX4_INFO("IMU temp:  %3.3f", (double)_sensor_temperature);
-	return _sensor_temperature;
 }
 
 int Heater::start()
@@ -411,11 +368,11 @@ int Heater::task_spawn(int argc, char *argv[])
 float Heater::temperature_setpoint(char *argv[])
 {
 	if (argv[1]) {
-		_p_temperature_setpoint.set(atof(argv[1]));
+		_param_sens_imu_temp.set(atof(argv[1]));
 	}
 
-	PX4_INFO("Target temp:  %3.3f", (double)_p_temperature_setpoint.get());
-	return _p_temperature_setpoint.get();
+	PX4_INFO("Target temp:  %3.3f", (double)_param_sens_imu_temp.get());
+	return _param_sens_imu_temp.get();
 }
 
 void Heater::update_params(const bool force)

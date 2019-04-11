@@ -91,12 +91,15 @@ bool FlightTaskAutoMapper2::update()
 		break;
 	}
 
+	_obstacle_avoidance.injectAvoidanceSetpoints(_position_setpoint, _velocity_setpoint, _yaw_setpoint,
+			_yawspeed_setpoint);
+
 	_generateSetpoints();
 
 	// during mission and reposition, raise the landing gears but only
 	// if altitude is high enough
 	if (_highEnoughForLandingGear()) {
-		_constraints.landing_gear = vehicle_constraints_s::GEAR_UP;
+		_gear.landing_gear = landing_gear_s::GEAR_UP;
 	}
 
 	// update previous type
@@ -110,7 +113,6 @@ void FlightTaskAutoMapper2::_reset()
 	// Set setpoints equal current state.
 	_velocity_setpoint = _velocity;
 	_position_setpoint = _position;
-	_speed_at_target = 0.0f;
 }
 
 void FlightTaskAutoMapper2::_prepareIdleSetpoints()
@@ -125,22 +127,24 @@ void FlightTaskAutoMapper2::_prepareLandSetpoints()
 {
 	// Keep xy-position and go down with landspeed
 	_position_setpoint = Vector3f(_target(0), _target(1), NAN);
-	const float speed_lnd = (_alt_above_ground > MPC_LAND_ALT1.get()) ? _constraints.speed_down : MPC_LAND_SPEED.get();
+	const float speed_lnd = (_alt_above_ground > _param_mpc_land_alt1.get()) ? _constraints.speed_down :
+				_param_mpc_land_speed.get();
 	_velocity_setpoint = Vector3f(Vector3f(NAN, NAN, speed_lnd));
 
 	// set constraints
-	_constraints.tilt = MPC_TILTMAX_LND.get();
-	_constraints.landing_gear = vehicle_constraints_s::GEAR_DOWN;
+	_constraints.tilt = _param_mpc_tiltmax_lnd.get();
+	_gear.landing_gear = landing_gear_s::GEAR_DOWN;
 }
 
 void FlightTaskAutoMapper2::_prepareTakeoffSetpoints()
 {
 	// Takeoff is completely defined by target position
 	_position_setpoint = _target;
-	const float speed_tko = (_alt_above_ground > MPC_LAND_ALT1.get()) ? _constraints.speed_up : MPC_TKO_SPEED.get();
+	const float speed_tko = (_alt_above_ground > _param_mpc_land_alt1.get()) ? _constraints.speed_up :
+				_param_mpc_tko_speed.get();
 	_velocity_setpoint = Vector3f(NAN, NAN, -speed_tko); // Limit the maximum vertical speed
 
-	_constraints.landing_gear = vehicle_constraints_s::GEAR_DOWN;
+	_gear.landing_gear = landing_gear_s::GEAR_DOWN;
 }
 
 void FlightTaskAutoMapper2::_prepareVelocitySetpoints()
@@ -179,7 +183,7 @@ void FlightTaskAutoMapper2::updateParams()
 	FlightTaskAuto::updateParams();
 
 	// make sure that alt1 is above alt2
-	MPC_LAND_ALT1.set(math::max(MPC_LAND_ALT1.get(), MPC_LAND_ALT2.get()));
+	_param_mpc_land_alt1.set(math::max(_param_mpc_land_alt1.get(), _param_mpc_land_alt2.get()));
 }
 
 bool FlightTaskAutoMapper2::_highEnoughForLandingGear()
