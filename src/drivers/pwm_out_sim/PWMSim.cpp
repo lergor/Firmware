@@ -167,6 +167,7 @@ PWMSim::run()
 	update_params();
 	int params_sub = orb_subscribe(ORB_ID(parameter_update));
 
+    _emergency_sub = orb_subscribe(ORB_ID(emergency));
 	/* loop until killed */
 	while (!should_exit()) {
 
@@ -236,6 +237,7 @@ PWMSim::run()
 		/* We also publish if not armed, this way we make sure SITL gets feedback. */
 		if (_mixers != nullptr) {
 
+            _mixers->set_emergency_situation(_emergency.emergency_type);
 			/* do mixing */
 			_actuator_outputs.noutputs = _mixers->mix(&_actuator_outputs.output[0], _num_outputs);
 
@@ -334,6 +336,11 @@ PWMSim::run()
 			orb_copy(ORB_ID(parameter_update), params_sub, &update);
 			update_params();
 		}
+
+        orb_check(_emergency_sub, &param_updated);
+        if (param_updated) {
+            orb_copy(ORB_ID(emergency), _emergency_sub, &_emergency);
+        }
 	}
 
 	for (unsigned i = 0; i < actuator_controls_s::NUM_ACTUATOR_CONTROL_GROUPS; i++) {
@@ -344,6 +351,7 @@ PWMSim::run()
 
 	orb_unsubscribe(_armed_sub);
 	orb_unsubscribe(params_sub);
+    orb_unsubscribe(_emergency_sub);
 }
 
 int

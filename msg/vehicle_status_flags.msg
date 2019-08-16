@@ -14,6 +14,7 @@ bool condition_local_velocity_valid		# set to true by the commander app if the q
 bool condition_local_altitude_valid
 bool condition_power_input_valid                # set if input power is valid
 bool condition_battery_healthy                # set if battery is available and not low
+bool all_rotors_valid
 
 bool circuit_breaker_engaged_power_check
 bool circuit_breaker_engaged_airspd_check

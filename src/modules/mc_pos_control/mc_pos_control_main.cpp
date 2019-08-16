@@ -58,6 +58,7 @@
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/topics/vehicle_trajectory_waypoint.h>
 #include <uORB/topics/landing_gear.h>
+#include <uORB/topics/emergency.h>
 
 #include <float.h>
 #include <mathlib/mathlib.h>
@@ -109,6 +110,8 @@ private:
 
 	orb_advert_t	_att_sp_pub{nullptr};			/**< attitude setpoint publication */
 	orb_advert_t _pub_vehicle_command{nullptr};           /**< vehicle command publication */
+	orb_advert_t _mavlink_log_pub{nullptr};
+    orb_advert_t _pub_emergency_info{nullptr};           /**< vehicle command publication */
 
 	orb_id_t _attitude_setpoint_id{nullptr};
 
@@ -124,6 +127,7 @@ private:
 	uORB::Subscription _params_sub{ORB_ID(parameter_update)};			/**< notification of parameter updates */
 	uORB::Subscription _att_sub{ORB_ID(vehicle_attitude)};				/**< vehicle attitude */
 	uORB::Subscription _home_pos_sub{ORB_ID(home_position)}; 			/**< home position */
+    uORB::Subscription _vehicle_emergency_sub{ORB_ID(emergency)}; 			/**< home position */
 
 	int _task_failure_count{0};         /**< counter for task failures */
 
@@ -143,6 +147,7 @@ private:
 	vehicle_local_position_s _local_pos{};			/**< vehicle local position */
 	home_position_s	_home_pos{};			/**< home position */
 	landing_gear_s _landing_gear{};
+    emergency_s		_emergency_info {};
 	int8_t _old_landing_gear_position{landing_gear_s::GEAR_KEEP};
 
 	DEFINE_PARAMETERS(
@@ -220,6 +225,7 @@ private:
 	 * Publish attitude.
 	 */
 	void publish_attitude();
+    void publish_emergency_info();
 
 	/**
 	 * Adjust the setpoint during landing.
@@ -366,6 +372,7 @@ MulticopterPositionControl::poll_subscriptions()
 			_states.yaw = Eulerf(Quatf(att.q)).psi();
 		}
 	}
+    _vehicle_emergency_sub.update(&_emergency_info);
 }
 
 void
@@ -522,6 +529,14 @@ MulticopterPositionControl::run()
 		_takeoff.updateTakeoffState(_control_mode.flag_armed, _vehicle_land_detected.landed, false, 10.f,
 					    !_control_mode.flag_control_climb_rate_enabled, time_stamp_current);
 
+        if(_emergency_info.emergency_type != emergency_s::NO_BROKEN_ROTORS) {
+            if (_flight_tasks.getActiveTask() != static_cast<int>(FlightTaskIndex::EmergencyLanding)) {
+                _flight_tasks.switchTask(FlightTaskIndex::EmergencyLanding);
+                PX4_INFO("Emergency landing");
+                vehicle_local_position_setpoint_s setpoint;
+                failsafe(setpoint, _states, true, !was_in_failsafe);
+            }
+        } else
 		// takeoff delay for motors to reach idle speed
 		if (_takeoff.getTakeoffState() >= TakeoffState::ready_for_takeoff) {
 			// when vehicle is ready switch to the required flighttask
@@ -664,6 +679,7 @@ MulticopterPositionControl::run()
 			// the attitude septoint should come from another source, otherwise
 			// they might conflict with each other such as in offboard attitude control.
 			publish_attitude();
+            publish_emergency_info();
 
 			// if there's any change in landing gear setpoint publish it
 			if (gear.landing_gear != _old_landing_gear_position
@@ -960,6 +976,17 @@ MulticopterPositionControl::publish_attitude()
 	} else if (_attitude_setpoint_id) {
 		_att_sp_pub = orb_advertise(_attitude_setpoint_id, &_att_sp);
 	}
+}
+
+void
+MulticopterPositionControl::publish_emergency_info() {
+    _emergency_info.timestamp = hrt_absolute_time();
+
+    if (_pub_emergency_info != nullptr) {
+        orb_publish(ORB_ID(emergency_info), _pub_emergency_info, &_emergency_info);
+    } else {
+        _pub_emergency_info = orb_advertise(ORB_ID(emergency_info), &_emergency_info);
+    }
 }
 
 void MulticopterPositionControl::check_failure(bool task_failure, uint8_t nav_state)

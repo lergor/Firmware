@@ -109,7 +109,8 @@ MixerGroup::mix(float *outputs, unsigned space)
 	unsigned index = 0;
 
 	while ((mixer != nullptr) && (index < space)) {
-		index += mixer->mix(outputs + index, space - index);
+        mixer->set_emergency_situation(emergency_type);
+        index += mixer->mix(outputs + index, space - index);
 		mixer = mixer->_next;
 	}
 

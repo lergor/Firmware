@@ -253,6 +253,8 @@ public:
 	 */
 	virtual void set_airmode(Airmode airmode) {};
 
+    virtual void set_emergency_situation(int type) {};
+
 protected:
 	/** client-supplied callback used when fetching control values */
 	ControlCallback			_control_cb;
@@ -449,8 +451,13 @@ public:
 
 	void 	set_airmode(Airmode airmode) override;
 
+   void set_emergency_situation(int type) override {
+        emergency_type = type;
+   }
+
 private:
 	Mixer				*_first;	/**< linked list of mixers */
+    int emergency_type = 0;
 
 	/* do not allow to copy due to pointer data members */
 	MixerGroup(const MixerGroup &);
@@ -572,6 +579,8 @@ public:
 	unsigned set_trim(float trim) override;
 
 	unsigned get_trim(float *trim) override;
+
+    void set_emergency_situation(int type) override {};
 
 protected:
 
@@ -728,6 +737,8 @@ public:
 		uint16_t value;
 	};
 
+    void set_emergency_situation(int type) override;
+
 private:
 	/**
 	 * Computes the gain k by which desaturation_vector has to be multiplied
@@ -807,6 +818,8 @@ private:
 	float				_idle_speed;
 	float 				_delta_out_max;
 	float 				_thrust_factor;
+
+    int _emergency_type = 0;
 
 	Airmode				_airmode;
 
@@ -898,6 +911,8 @@ public:
 	{
 		return 4;
 	}
+
+    void set_emergency_situation(int type) override {};
 
 private:
 	mixer_heli_s			_mixer_info;

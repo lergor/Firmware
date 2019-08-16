@@ -96,6 +96,7 @@
 #include <uORB/topics/vehicle_command_ack.h>
 #include <uORB/topics/vehicle_land_detected.h>
 #include <uORB/topics/vtol_vehicle_status.h>
+#include <uORB/topics/emergency.h>
 
 typedef enum VEHICLE_MODE_FLAG {
 	VEHICLE_MODE_FLAG_CUSTOM_MODE_ENABLED = 1, /* 0b00000001 Reserved for future use. | */
@@ -167,6 +168,8 @@ static struct vehicle_land_detected_s land_detector = {};
 static float _eph_threshold_adj =
 	INFINITY;	///< maximum allowable horizontal position uncertainty after adjustment for flight condition
 static bool _skip_pos_accuracy_check = false;
+
+static struct emergency_s _emergency = {};
 
 /**
  * The daemon app only briefly exists to start
@@ -398,6 +401,10 @@ int commander_main(int argc, char *argv[])
 
 		bool ret = false;
 
+		if(!status_flags.all_rotors_valid) {
+			PX4_ERR("some rotors are broken, can't takeoff");
+		}
+
 		/* see if we got a home position */
 		if (status_flags.condition_local_position_valid) {
 
@@ -568,6 +575,7 @@ Commander::Commander() :
 	status_flags.rc_calibration_valid = true;
 
 	status_flags.avoidance_system_valid = false;
+    status_flags.all_rotors_valid = true;
 }
 
 Commander::~Commander()
@@ -1059,7 +1067,16 @@ Commander::handle_command(vehicle_status_s *status_local, const vehicle_command_
 	case vehicle_command_s::VEHICLE_CMD_DO_SET_ROI_NONE:
 		/* ignore commands that are handled by other parts of the system */
 		break;
-
+    case vehicle_command_s::VEHICLE_CMD_NAV_EMERGENCY: {
+        if (TRANSITION_CHANGED == main_state_transition(*status_local, commander_state_s::MAIN_STATE_AUTO_EMERGENCY, status_flags, &internal_state)) {
+            mavlink_and_console_log_info(&mavlink_log_pub, "Emergency! Landing at current position");
+            cmd_result = vehicle_command_s::VEHICLE_CMD_RESULT_ACCEPTED;
+        } else {
+            mavlink_log_critical(&mavlink_log_pub, "Emergency already handled");
+            cmd_result = vehicle_command_s::VEHICLE_CMD_RESULT_DENIED;
+        }
+    }
+        break;
 	default:
 		/* Warn about unsupported commands, this makes sense because only commands
 		 * to this component ID (or all) are passed by mavlink. */
@@ -1250,6 +1267,7 @@ Commander::run()
 	uORB::Subscription subsys_sub{ORB_ID(subsystem_info)};
 	uORB::Subscription system_power_sub{ORB_ID(system_power)};
 	uORB::Subscription vtol_vehicle_status_sub{ORB_ID(vtol_vehicle_status)};
+    uORB::Subscription emergency_sub{ORB_ID(emergency)};
 
 	geofence_result_s geofence_result {};
 
@@ -1464,6 +1482,20 @@ Commander::run()
 
 		/* Update OA parameter */
 		status_flags.avoidance_system_required = _param_com_obs_avoid.get();
+
+        /* handle emergency */
+        if (emergency_sub.updated()) {
+            int prev = _emergency.emergency_type;
+            emergency_sub.copy(&_emergency);
+
+            if (prev != _emergency.emergency_type && _emergency.emergency_type != emergency_s::NO_BROKEN_ROTORS) {
+                internal_state.main_state = commander_state_s::MAIN_STATE_AUTO_EMERGENCY;
+                status.nav_state = vehicle_status_s::NAVIGATION_STATE_AUTO_LANDENGFAIL;
+                status.failsafe = true;
+                status_flags.all_rotors_valid = false;
+                status_changed = true;
+            }
+        }
 
 		/* handle power button state */
 		if (power_button_state_sub.updated()) {

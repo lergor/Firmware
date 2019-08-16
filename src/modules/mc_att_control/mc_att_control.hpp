@@ -60,8 +60,12 @@
 #include <uORB/topics/vehicle_land_detected.h>
 #include <uORB/topics/landing_gear.h>
 #include <vtol_att_control/vtol_type.h>
+#include <uORB/topics/emergency.h>
+#include <uORB/topics/actuator_outputs.h>
 
 #include <AttitudeControl.hpp>
+#include <modules/mc_att_control/EmergencyAttitudeControl/LQRController.h>
+#include <modules/mc_att_control/EmergencyAttitudeControl/EmergencyAttitudeControl.h>
 
 /**
  * Multicopter attitude control app start / stop handling function
@@ -107,6 +111,7 @@ private:
 	bool		vehicle_attitude_poll();
 	void		vehicle_motor_limits_poll();
 	void		vehicle_status_poll();
+    void        emergency_poll();
 
 	void		publish_actuator_controls();
 	void		publish_rates_setpoint();
@@ -156,6 +161,8 @@ private:
 	uORB::Subscription _sensor_bias_sub{ORB_ID(sensor_bias)};			/**< sensor in-run bias correction subscription */
 	uORB::Subscription _vehicle_land_detected_sub{ORB_ID(vehicle_land_detected)};	/**< vehicle land detected subscription */
 	uORB::Subscription _landing_gear_sub{ORB_ID(landing_gear)};
+    uORB::Subscription     _vehicle_emergency_sub{ORB_ID(emergency_info)};
+    uORB::Subscription     _act_actuators_sub{ORB_ID(actuator_outputs)};
 
 	int		_sensor_gyro_sub[MAX_GYRO_COUNT];	/**< gyro data subscription */
 
@@ -188,7 +195,16 @@ private:
 	struct vehicle_land_detected_s		_vehicle_land_detected {};
 	struct landing_gear_s 			_landing_gear {};
 
-	MultirotorMixer::saturation_status _saturation_status{};
+	struct emergency_s              _emergency_info {};
+    struct actuator_outputs_s       _actuator_outputs{};
+
+    // DEBUG
+    uORB::Publication<emergency_s>	_emergency_info2_pub{ORB_ID(emergency_info2)};			/**< rate setpoint publication */
+
+    LQRController _lqr_control;
+    EmergencyAttitudeControl _emergency_attitude_control;
+
+    MultirotorMixer::saturation_status _saturation_status{};
 
 	perf_counter_t	_loop_perf;			/**< loop performance counter */
 
@@ -284,6 +300,9 @@ private:
 
 	matrix::Vector3f _acro_rate_max;	/**< max attitude rates in acro mode */
 	float _man_tilt_max;			/**< maximum tilt allowed for manual flight [rad] */
+
+    enum { PID_CONTROL=0, LQR_CONTROL };
+    int _control_type{PID_CONTROL};
 
 };
 

@@ -50,6 +50,7 @@
 #include <uORB/topics/actuator_controls.h>
 #include <uORB/topics/actuator_outputs.h>
 #include <uORB/topics/parameter_update.h>
+#include <uORB/topics/emergency.h>
 
 class PWMSim : public cdev::CDev, public ModuleBase<PWMSim>
 {
@@ -130,6 +131,8 @@ private:
 
 	actuator_controls_s _controls[actuator_controls_s::NUM_ACTUATOR_CONTROL_GROUPS] {};
 	orb_id_t	_control_topics[actuator_controls_s::NUM_ACTUATOR_CONTROL_GROUPS] {};
+    emergency_s _emergency{};
+    int _emergency_sub{-1};            /**< emergency state subscription */
 
 	Mixer::Airmode 	_airmode{Mixer::Airmode::disabled}; 	///< multicopter air-mode
 

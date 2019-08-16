@@ -66,6 +66,7 @@
 #include <uORB/topics/vehicle_local_position.h>
 #include <uORB/topics/vehicle_odometry.h>
 #include <uORB/topics/vehicle_status.h>
+#include <uORB/topics/emergency.h>
 #include <uORB/uORB.h>
 
 #include <v2.0/common/mavlink.h>
@@ -228,6 +229,7 @@ private:
 	orb_advert_t _flow_pub{nullptr};
 	orb_advert_t _irlock_report_pub{nullptr};
 	orb_advert_t _visual_odometry_pub{nullptr};
+    orb_advert_t _emergency_pub{nullptr};
 
 	int _param_sub{-1};
 

@@ -1,6 +1,6 @@
 ############################################################################
 #
-#   Copyright (c) 2015 PX4 Development Team. All rights reserved.
+#   Copyright (c) 2018 PX4 Development Team. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -31,36 +31,9 @@
 #
 ############################################################################
 
-add_subdirectory(AttitudeControl)
-add_subdirectory(EmergencyAttitudeControl)
-find_package(Eigen3 REQUIRED)
-
-px4_add_module(
-	MODULE modules__mc_att_control
-	MAIN mc_att_control
-	STACK_MAIN 1200
-	STACK_MAX 3500
-	COMPILE_FLAGS
-	SRCS
-		mc_att_control_main.cpp
-	DEPENDS
-		circuit_breaker
-		conversion
-		mathlib
-		AttitudeControl
-		EmergencyAttitudeControl
-	)
-
-include_directories(
-        ${EIGEN3_INCLUDE_DIRS}
-        ${EIGEN3_INCLUDE_DIRS}/eigen3
+px4_add_library(FlightTaskEmergencyLanding
+		FlightTaskEmergencyLanding.cpp
 )
 
-link_directories(
-        ${EIGEN3_LIBRARY_DIRS}
-)
-
-target_link_libraries(
-		EmergencyAttitudeControl
-        ${EIGEN3_LIBRARIES}
-)
+target_link_libraries(FlightTaskEmergencyLanding PUBLIC FlightTask)
+target_include_directories(FlightTaskEmergencyLanding PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

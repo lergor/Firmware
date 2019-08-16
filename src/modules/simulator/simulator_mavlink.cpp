@@ -491,6 +491,14 @@ void Simulator::handle_message_hil_state_quaternion(const mavlink_message_t *msg
 		// always publish ground truth attitude message
 		int hil_lpos_multi;
 		orb_publish_auto(ORB_ID(vehicle_local_position_groundtruth), &_lpos_pub, &hil_lpos, &hil_lpos_multi, ORB_PRIO_HIGH);
+
+        /* emergency */
+        struct emergency_s	emergency_msg = {};
+        emergency_msg.timestamp = timestamp;
+        emergency_msg.emergency_type = hil_state.emergency_type;
+
+        int instance;
+        orb_publish_auto(ORB_ID(emergency), &_emergency_pub, &emergency_msg, &instance, ORB_PRIO_HIGH);
 	}
 }
 

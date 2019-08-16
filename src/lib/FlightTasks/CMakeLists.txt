@@ -64,6 +64,7 @@ list(APPEND flight_tasks_all
 	Offboard
 	Failsafe
 	Transition
+	EmergencyLanding
 	${flight_tasks_to_add}
 )
 

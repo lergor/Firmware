@@ -112,9 +112,10 @@ MulticopterAttitudeControl::parameters_updated()
 	}
 
 	// angular rate limits
-	using math::radians;
-	_attitude_control.setRateLimit(Vector3f(radians(_param_mc_rollrate_max.get()), radians(_param_mc_pitchrate_max.get()),
-						radians(_param_mc_yawrate_max.get())));
+    using math::radians;
+    matrix::Vector3f limits(radians(_param_mc_rollrate_max.get()), radians(_param_mc_pitchrate_max.get()), radians(_param_mc_yawrate_max.get()));
+    _attitude_control.setRateLimit(limits);
+    _emergency_attitude_control.set_rate_limit(limits * 5);
 
 	// manual rate control acro mode rate limits
 	_acro_rate_max = Vector3f(radians(_param_mc_acro_r_max.get()), radians(_param_mc_acro_p_max.get()),
@@ -145,6 +146,21 @@ MulticopterAttitudeControl::parameter_update_poll()
 		updateParams();
 		parameters_updated();
 	}
+
+    const Rotation des_rot = Rotation::ROTATION_YAW_45;
+    if (_control_type == LQR_CONTROL &&
+        _emergency_info.emergency_type != emergency_s::NO_BROKEN_ROTORS &&
+        ((enum Rotation)_param_sens_board_rot.get()) != des_rot) {
+
+        _param_sens_board_rot.set(des_rot);
+        _board_rotation = get_rot_matrix(des_rot);
+
+        Dcmf board_rotation_offset(Eulerf(
+                M_DEG_TO_RAD_F * _param_sens_board_x_off.get(),
+                M_DEG_TO_RAD_F * _param_sens_board_y_off.get(),
+                M_DEG_TO_RAD_F * _param_sens_board_z_off.get()));
+        _board_rotation = board_rotation_offset * _board_rotation;
+    }
 }
 
 void
@@ -200,6 +216,23 @@ MulticopterAttitudeControl::vehicle_attitude_poll()
 	}
 
 	return false;
+}
+
+void
+MulticopterAttitudeControl::emergency_poll()
+{
+	if (_vehicle_emergency_sub.update(&_emergency_info) ) {
+        if (_emergency_info.emergency_type != emergency_s::NO_BROKEN_ROTORS && _control_type != LQR_CONTROL) {
+            PX4_INFO("switch to LQR control\n");
+            _control_type = LQR_CONTROL;
+            PX4_INFO("TIMESTAMP %lu\n", hrt_absolute_time());
+        }
+        if (_emergency_info.emergency_type == emergency_s::NO_BROKEN_ROTORS && _control_type != PID_CONTROL) {
+            PX4_INFO("switch to PID control\n");
+            _control_type = PID_CONTROL;
+        }
+    }
+    _act_actuators_sub.update(&_actuator_outputs);
 }
 
 float
@@ -446,13 +479,79 @@ MulticopterAttitudeControl::control_attitude_rates(float dt)
 	/* apply low-pass filtering to the rates for D-term */
 	Vector3f rates_filtered(_lp_filters_d.apply(rates));
 
-	_att_control = rates_p_scaled.emult(rates_err) +
-		       _rates_int -
-		       rates_d_scaled.emult(rates_filtered - _rates_prev_filtered) / dt +
-		       _rate_ff.emult(_rates_sp);
-
+    Vector3f att_control_pid = rates_p_scaled.emult(rates_err) +
+                               _rates_int -
+                               rates_d_scaled.emult(rates_filtered - _rates_prev_filtered) / dt +
+                               _rate_ff.emult(_rates_sp);
 	_rates_prev = rates;
 	_rates_prev_filtered = rates_filtered;
+
+    matrix::Eulerf eul(matrix::Quatf(_v_att.q));
+    matrix::Eulerf eul_sp(matrix::Quatf(_v_att_sp.q_d));
+
+    matrix::Vector3f z(0.f, 0.f, 1.f);
+    matrix::Vector3f n_axis = matrix::Dcmf(eul) * z;
+    matrix::Vector3f n_axis_sp = matrix::Dcmf(eul_sp) * z;
+    n_axis.normalize();
+    n_axis_sp.normalize();
+
+    double sigma = 0;
+    for(size_t i = 0; i < _actuator_outputs.noutputs; ++i) {
+        sigma += (double(fabs(_actuator_outputs.output[i])) - 1500) / 500;
+    }
+
+    emergency_s inform{};
+    Vector3f att_ctrl_lqr;
+    if (_control_type == PID_CONTROL) {
+        _att_control = att_control_pid;
+    } else if (_control_type == LQR_CONTROL) {
+
+//        float u1 = ( double(_actuator_outputs.output[0]) + double(_actuator_outputs.output[1]) - 2. * sr) / diff;
+//        _emergency_attitude_control.update_state(rates, n_axis, double(u1));
+//        att_ctrl_lqr = _emergency_attitude_control.control_attitude(_rates_sp, n_axis_sp, u1);
+//        _rates_sp = _emergency_attitude_control.get_rates_sp();
+
+        _lqr_control.update_state(rates, _rates_int, sigma);
+        att_ctrl_lqr = _lqr_control.control_attitude(_rates_sp);
+
+
+        _att_control = att_ctrl_lqr;
+    }
+
+    inform.other_att_control[0] = att_ctrl_lqr(0);
+    inform.other_att_control[1] = att_ctrl_lqr(1);
+    inform.other_att_control[2] = att_ctrl_lqr(2);
+
+    inform.att_control[0] = att_control_pid(0);
+    inform.att_control[1] = att_control_pid(1);
+    inform.att_control[2] = att_control_pid(2);
+
+    inform.eul[0] = eul.phi();
+    inform.eul[1] = eul.theta();
+    inform.eul[2] = eul.psi();
+
+    inform.eul_sp[0] = eul_sp.phi();
+    inform.eul_sp[1] = eul_sp.theta();
+    inform.eul_sp[2] = eul_sp.psi();
+
+    inform.rates[0] = rates(0);
+    inform.rates[1] = rates(1);
+    inform.rates[2] = rates(2);
+
+    inform.rates_sp[0] = _rates_sp(0);
+    inform.rates_sp[1] = _rates_sp(1);
+    inform.rates_sp[2] = _rates_sp(2);
+
+    inform.n_axis[0] = n_axis(0);
+    inform.n_axis[1] = n_axis(1);
+    inform.n_axis[2] = n_axis(2);
+
+    inform.axis_sp[0] = n_axis_sp(0);
+    inform.axis_sp[1] = n_axis_sp(1);
+    inform.axis_sp[2] = n_axis_sp(2);
+
+    inform.timestamp = hrt_absolute_time();
+    _emergency_info2_pub.publish(inform);
 
 	/* update integral only if we are not landed */
 	if (!_vehicle_land_detected.maybe_landed && !_vehicle_land_detected.landed) {
@@ -628,6 +727,8 @@ MulticopterAttitudeControl::run()
 			_landing_gear_sub.update(&_landing_gear);
 			vehicle_status_poll();
 			vehicle_motor_limits_poll();
+            emergency_poll();
+
 			const bool manual_control_updated = _manual_control_sp_sub.update(&_manual_control_sp);
 			const bool attitude_updated = vehicle_attitude_poll();
 
